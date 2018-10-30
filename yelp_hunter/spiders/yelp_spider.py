@@ -5,7 +5,7 @@ import re
 from yelp_hunter.items import YelpHunterItem
 from urllib.parse import urlparse
 
-s_url = 'https://www.yelp.com/search?find_desc=business+coach&find_loc=San+Francisco,+CA'
+s_url = 'https://www.yelp.com/search?find_desc=Business+Coach&find_loc=New+York+City'
 
 
 # Adding http in front of the website address
@@ -22,7 +22,7 @@ def validate_link(domain, link):
         abs_url = domain + link
         return abs_url
     elif link.startswith(domain):
-        return link
+        return domain
     else:
         return None
 
@@ -58,7 +58,7 @@ class YelpSpiderSpider(scrapy.Spider):
             item["phone"] = phone_number.strip()
             item["website"] = website
             # email = parse_email(url=add_http(website))
-            yield scrapy.Request(url=add_http(website), callback=self.parse_email, meta={'item': item}, dont_filter=True)
+            yield scrapy.Request(url=add_http(website), callback=self.parse_email, meta={'item': item, 'links': set(), 'emails': set()}, dont_filter=True)
 
 
 
@@ -68,31 +68,28 @@ class YelpSpiderSpider(scrapy.Spider):
             # if email:
             #     item["email"] = email
             # else:
-            links = set()
-            emails = ""
+            links = response.meta['links']
+            emails = response.meta['emails']
+
             # Constructing the url from the parsed page to aboid scraping other domains
             domain = urlparse(response.url)
             domain = domain.scheme + "://" + domain.netloc
             all_links = response.css('a::attr(href)').extract()
+            
+            # Getting all email address found in the webpage
+            for found_address in re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", str(response.body), re.I):
+                emails.add(found_address)
+
+            # Parsing links to other pages of the website
             for link in all_links:
                 url = validate_link(domain, link)
                 links.add(url)
-            yield scrapy.Request(url=domain, callback=self.parse_email_2nd, meta={'item': item, 'links': links, 'emails': emails}, dont_filter=True)
-            # yield item
 
-    # Collection email address from business website
-    def parse_email_2nd(self, response, links = None):
-        email = re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", str(response.body), re.I)[0]
-        links = response.meta['links']
-        item = response.meta['item']
-        emails = response.meta['emails']
-        item["email"] = emails
-        emails.add(email)
-        # Looping through all the pages of the website to check for email
-        while len(links) > 0 and emails != "":
-            link = links.pop()
-            # email = re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", str(response.body), re.I)[0]
-            # emails.add(email)
-            yield scrapy.Request(url=link, callback=self.parse_email_2nd, meta={'item': item, 'links': links, 'emails': emails}, dont_filter=True)
-        item["email"] = emails
-        yield item
+            # Check all the links in the website untill find an email address
+            while len(links) > 0 and len(emails) < 1:
+                link = links.pop()
+                scrapy.Request(url=link, callback=self.parse_email, meta={'item': item, 'links': links, 'emails': emails}, dont_filter=True)
+            
+            # Finally add the result into output
+            item["email"] = ",".join(emails)
+            yield item
